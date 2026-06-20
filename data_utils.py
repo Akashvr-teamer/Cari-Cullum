@@ -2,6 +2,8 @@
 import json
 import os
 
+import streamlit as st
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
 CAT_CONFIG = {
@@ -44,7 +46,26 @@ def credit_value(course):
 
 
 def by_semester(courses, sem):
+    """Courses whose *primary, credit-bearing* semester is `sem`.
+
+    This is the list the credit ruler/total is computed from. A course never
+    counts twice here even if it's also cross-listed via semester_alt.
+    """
     return [c for c in courses if c.get("semester_primary") == sem]
+
+
+def cross_listed_for(courses, sem):
+    """Courses taught in `sem` at *some* colleges, but whose official credit
+    slot (semester_primary) is a different semester — e.g. Economics for
+    Engineers / Engineering Ethics, which KTU lists as S3 but plenty of
+    colleges actually run in S4.
+
+    These are shown for reference in the alt semester's tab, but are
+    deliberately excluded from that semester's credit_summary/total, since
+    a student only takes — and is only credited for — it once, in whichever
+    semester their own college schedules it.
+    """
+    return [c for c in courses if c.get("semester_alt") == sem]
 
 
 def credit_summary(courses):
@@ -67,8 +88,14 @@ def credit_summary(courses):
     }
 
 
+@st.cache_data(show_spinner=False)
 def condensed_catalog(courses, only_buckets=None, max_chars=None):
-    """Build a compact, token-cheap text catalog for LLM context."""
+    """Build a compact, token-cheap text catalog for LLM context.
+
+    Cached: with 98 courses this is cheap either way, but the chat tab calls
+    it on every single message, so we skip rebuilding the string from
+    scratch each time the course data itself hasn't changed.
+    """
     lines = []
     for c in courses:
         b = bucket_of(c)
