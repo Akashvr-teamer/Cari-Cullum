@@ -1,0 +1,71 @@
+{
+  "3": {
+    "theme": "Foundations",
+    "blurb": "Formal computation, data structures, and the first vocabulary of machine learning.",
+    "skills": [
+      "Reason formally about computation using automata, grammars and Turing machines",
+      "Implement and analyze core data structures — trees, graphs, hash tables — for time/space efficiency",
+      "Design and simulate digital logic circuits at the gate and register-transfer level",
+      "Apply probability, random variables and stochastic processes to engineering problems",
+      "Describe the supervised/unsupervised learning paradigms that later ML courses build on",
+      "Frame technical decisions with an awareness of ethics, sustainability and economics"
+    ]
+  },
+  "4": {
+    "theme": "Intelligent Systems & OS",
+    "blurb": "Classical AI, operating-system internals, and databases, with the first taste of specialization.",
+    "skills": [
+      "Implement classical AI search, knowledge representation and reasoning techniques",
+      "Explain and modify OS internals — process scheduling, memory management, concurrency",
+      "Design relational and NoSQL schemas and query them effectively",
+      "Apply graph theory to model real-world systems",
+      "Go one layer deeper in a chosen elective track — software engineering, pattern recognition, computer architecture, or similar",
+      "Build, debug and document multi-component lab projects (OS + AI labs)"
+    ]
+  },
+  "5": {
+    "theme": "Deep Learning & Networks",
+    "blurb": "Neural networks, computer vision, and networking, alongside a widening elective basket.",
+    "skills": [
+      "Train and evaluate deep neural networks from first principles",
+      "Build basic computer-vision pipelines: image processing, features, recognition",
+      "Explain the TCP/IP protocol stack and analyze network performance",
+      "Design algorithms with formal complexity/correctness analysis (DAA)",
+      "Specialize further via electives — compilers, fuzzy/expert systems, signal processing, or data mining",
+      "Plan and manage a software project's scope, schedule and risk"
+    ]
+  },
+  "6": {
+    "theme": "NLP & Generative AI",
+    "blurb": "Language models, generative AI, and data analytics — the first semester with Open Electives.",
+    "skills": [
+      "Build NLP pipelines: tokenization, embeddings, sequence models, and transformer-based methods",
+      "Work hands-on with generative AI architectures covered in the Generative AI course",
+      "Run an end-to-end data analytics workflow from raw data to insight",
+      "Choose across a cross-department Open Elective basket (data structures, crypto, ML for engineers, AI, networking) in addition to a Program Elective",
+      "Evaluate an emerging computing paradigm in depth — cloud, quantum, or cryptographic systems — depending on the elective picked"
+    ]
+  },
+  "7": {
+    "theme": "Specialization",
+    "blurb": "An almost entirely elective semester — pick a lane and go deep.",
+    "skills": [
+      "Apply deep, self-chosen specialization knowledge from a 19-course Program Elective basket spanning security, theory, systems, AI ethics and NLP",
+      "Translate research-level topics — formal methods, approximation algorithms, parallel computing — into working solutions",
+      "Practice responsible/ethical AI design and evaluate systems against fairness and safety criteria, if that elective is chosen",
+      "Build systems-level depth in embedded, real-time, or high-performance computing tracks",
+      "Pick a second, cross-department Open Elective to broaden outside the core AI/ML track"
+    ]
+  },
+  "8": {
+    "theme": "Capstone Specialization",
+    "blurb": "Final electives in LLMs, security and HCI — paired, in the official scheme, with a major project.",
+    "skills": [
+      "Synthesize coursework into a capstone-level individual specialization — LLMs, security, HCI, storage systems, or similar",
+      "Apply prompt-engineering and LLM techniques to real generative-AI products",
+      "Reason about complex, large-scale software/AI systems end-to-end",
+      "Round out the degree with a final Open Elective outside the core track",
+      "Demonstrate readiness for industry or research — typically alongside a Major Project credited outside this syllabus document"
+    ]
+  }
+}
