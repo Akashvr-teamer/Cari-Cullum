@@ -33,7 +33,7 @@ with st.sidebar:
 
     provider = st.radio("Provider", ["Groq", "Gemini"], horizontal=True, key="provider")
 
-    secret_key = st.secrets.get("GROQ_API_KEY" if provider == "Groq" else "GEMINI_API_KEY", "")
+    secret_key = st.secrets.get("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" if provider == "Groq" else "GEMINI_API_KEY", "")
     api_key = st.text_input(
         f"{provider} API key",
         value=st.session_state.get(f"key_{provider}", secret_key),
