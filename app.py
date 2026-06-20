@@ -3,7 +3,7 @@ import streamlit as st
 import theme
 from data_utils import (
     CAT_CONFIG, load_courses, load_semester_meta, bucket_of,
-    by_semester, credit_summary, condensed_catalog, find_course,
+    by_semester, cross_listed_for, credit_summary, condensed_catalog, find_course,
 )
 from ai_utils import call_llm, LLMError, DEFAULT_MODELS
 
@@ -17,7 +17,7 @@ theme.inject(st)
 # ----------------------------------------------------------------------------
 # Data
 # ----------------------------------------------------------------------------
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def get_data():
     return load_courses(), load_semester_meta()
 
@@ -26,24 +26,64 @@ SEMESTERS = sorted(SEMESTER_META.keys(), key=int)
 
 # ----------------------------------------------------------------------------
 # Sidebar — AI provider config (free tiers: Groq / Google Gemini)
+#
+# API keys are resolved secrets-first: if GROQ_API_KEY / GEMINI_API_KEY is
+# set as a Streamlit secret, the sidebar never asks at all. Only falls back
+# to a manual text input — kept for the current browser session only — when
+# no secret is configured.
 # ----------------------------------------------------------------------------
+SECRET_NAMES = {"Groq": "GROQ_API_KEY", "Gemini": "GEMINI_API_KEY"}
+
+
+def _get_secret(name):
+    """st.secrets.get() raises StreamlitSecretNotFoundError instead of
+    returning the default when *no* secrets.toml exists anywhere yet
+    (a fresh checkout, before anyone's set one up) — which would otherwise
+    crash the whole app before the sidebar even renders. Treat "no secrets
+    configured" as just... no secret.
+    """
+    try:
+        return st.secrets.get(name, "")
+    except Exception:
+        return ""
+
+
 with st.sidebar:
     st.markdown("### 🤖 AI setup")
     st.caption("Powers the **Ask the Curriculum** and **Elective Finder** tabs. Free tier, no card needed.")
 
     provider = st.radio("Provider", ["Groq", "Gemini"], horizontal=True, key="provider")
+    state_key = f"key_{provider}"
+    secret_val = _get_secret(SECRET_NAMES[provider])
 
-    secret_key = st.secrets.get("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" if provider == "Groq" else "GEMINI_API_KEY", "")
-    api_key = st.text_input(
-        f"{provider} API key",
-        value=st.session_state.get(f"key_{provider}", secret_key),
-        type="password",
-        key=f"key_{provider}",
-        help="Stored only for this session. Deployed apps should set this as a Streamlit secret instead.",
-    )
+    if secret_val:
+        st.session_state[state_key] = secret_val
+        st.success("API key loaded from saved secrets — nothing to type.", icon="🔐")
+    else:
+        st.session_state.setdefault(state_key, "")
+        st.text_input(
+            f"{provider} API key",
+            type="password",
+            key=state_key,
+            help="Kept only for this browser session — it'll be gone after a page reload or "
+                 "app restart unless you save it as a secret (see below).",
+        )
+        if not st.session_state[state_key]:
+            with st.expander("🔒 Stop being asked every time"):
+                st.markdown(
+                    "Streamlit forgets anything typed into this box the moment the page "
+                    "reloads or the app restarts — that's the repeat prompt you're hitting. "
+                    "Fix it once, for good:\n\n"
+                    "**Running locally** — create `.streamlit/secrets.toml` next to `app.py` "
+                    "(there's a `secrets.toml.example` template included) with:\n"
+                    f"```toml\n{SECRET_NAMES[provider]} = \"your_key_here\"\n```\n\n"
+                    "**Deployed on Streamlit Community Cloud** — open your app, go to "
+                    "**Settings → Secrets**, and paste the same line there.\n\n"
+                    "Either way, this sidebar auto-detects it next load and stops asking."
+                )
 
     with st.expander("Advanced: model name"):
-        model = st.text_input("Model", value=DEFAULT_MODELS[provider], key=f"model_{provider}")
+        st.text_input("Model", value=DEFAULT_MODELS[provider], key=f"model_{provider}")
         st.caption("Free-tier model names change occasionally — update here if a request fails.")
 
     if provider == "Groq":
@@ -77,24 +117,34 @@ with st.expander("📋 Reading this map (disclaimer)"):
     st.markdown(
         "This explorer is built directly from a syllabus copy PDF — every course code, credit value, "
         "module and outcome is parsed from that document. It doesn't include the master scheme table, so "
-        "two things aren't reflected: **(1)** how many electives must be picked per basket (shown as "
-        "*pick 1* by convention), and **(2)** non-syllabus credit slots like Major Project, Mini Project, "
-        "Internship or Seminar. Cross-check both against your department's official curriculum structure sheet. "
-        "The AI tabs answer **only** from this same extracted data — they can't see anything outside it."
+        "three things aren't reflected automatically: **(1)** how many electives must be picked per basket "
+        "(shown as *pick 1* by convention), **(2)** non-syllabus credit slots like Major Project, Mini "
+        "Project, Internship or Seminar, and **(3)** which semester a couple of cross-listed courses (like "
+        "Economics for Engineers / Engineering Ethics) actually run in at *your* college — KTU lists them "
+        "under S3, but many colleges schedule them in S4 instead, so they're shown in both tabs here and "
+        "counted only once. Cross-check all of this against your department's official curriculum structure "
+        "sheet. The AI tabs answer **only** from this same extracted data — they can't see anything outside it."
     )
 
 tab_curriculum, tab_chat, tab_finder = st.tabs(["📚 Curriculum Map", "💬 Ask the Curriculum", "🎯 Elective Finder"])
 
 # ----------------------------------------------------------------------------
 # Tab 1 — Curriculum map
+#
+# Wrapped as a single @st.fragment: clicking a filter or a course card only
+# reruns this block, not the AI chat history or the rest of the app — and,
+# just as important, typing in the chat tab no longer has to rebuild this
+# entire 98-course grid on every keystroke either.
 # ----------------------------------------------------------------------------
-with tab_curriculum:
+@st.fragment
+def render_curriculum_tab():
     st.markdown(
         """
         <div class="legend-row">
           <div class="legend-chip"><span class="dot dot-core"></span>Core / Compulsory</div>
           <div class="legend-chip"><span class="dot dot-pe"></span>Program Elective</div>
           <div class="legend-chip"><span class="dot dot-oe"></span>Open Elective</div>
+          <div class="legend-chip"><span class="dot-cross"></span>Cross-listed (alt. semester)</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -106,6 +156,7 @@ with tab_curriculum:
         with sem_tab:
             meta = SEMESTER_META[sem]
             courses = by_semester(COURSES, sem)
+            cross_listed = cross_listed_for(COURSES, sem)
             cs = credit_summary(courses)
             total = cs["core"] + cs["pe"] + cs["oe"]
             core_pct = (cs["core"] / total * 100) if total else 0
@@ -116,7 +167,7 @@ with tab_curriculum:
                 pick_note.append("1 Program Elective")
             if cs["has_oe"]:
                 pick_note.append("1 Open Elective")
-            note = ("*picking " + " + ".join(pick_note)) if pick_note else "*core only — see note above"
+            note = ("picking " + " + ".join(pick_note)) if pick_note else "core only — see note above"
 
             col1, col2 = st.columns([2.1, 1])
             with col1:
@@ -139,7 +190,7 @@ with tab_curriculum:
                     f"""<div class="glass-panel">
                           <div class="ruler-label"><span>Min. credit load*</span><b>{total:g} cr</b></div>
                           <div class="ruler">{segs}</div>
-                          <div class="ruler-note">{note}</div>
+                          <div class="ruler-note">*{note}</div>
                         </div>""",
                     unsafe_allow_html=True,
                 )
@@ -187,15 +238,49 @@ with tab_curriculum:
                 cols = st.columns(3)
                 for i, c in enumerate(group):
                     with cols[i % 3]:
-                        with st.container(key=f"card_{bucket}_{c['code']}"):
+                        with st.container(key=f"card_{bucket}_{sem}_{c['code']}"):
+                            alt_tag = f"  ·  may run in S{c['semester_alt']} too" if c.get("semester_alt") else ""
                             label = (
                                 f"{cfg['emoji']} `{c.get('code','—')}`  ·  {c.get('credits','—')} cr  \n"
                                 f"**{c.get('title','Untitled')}**  \n"
-                                f"{c.get('course_type') or '—'}  ·  view syllabus →"
+                                f"{c.get('course_type') or '—'}{alt_tag}  ·  view syllabus →"
                             )
-                            if st.button(label, key=f"btn_{bucket}_{c['code']}", use_container_width=True):
+                            if st.button(label, key=f"btn_{bucket}_{sem}_{c['code']}", use_container_width=True):
                                 st.session_state.selected_course = c["code"]
                                 st.rerun()
+
+            if cross_listed:
+                st.markdown(
+                    """<div class="cat-divider cross">
+                          <span class="dot-cross"></span>
+                          <span class="label">Cross-listed here too</span>
+                          <div class="line"></div>
+                        </div>""",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    "<div class='cross-note'>Officially scheduled in a different semester, but plenty of "
+                    "colleges run it here instead — it depends on your institution. It's already counted "
+                    "toward that other semester's credit load above, so it's <b>not</b> added to this "
+                    "semester's total too, to avoid double-counting.</div>",
+                    unsafe_allow_html=True,
+                )
+                cols = st.columns(3)
+                for i, c in enumerate(cross_listed):
+                    with cols[i % 3]:
+                        with st.container(key=f"card_cross_{sem}_{c['code']}"):
+                            label = (
+                                f"🔁 `{c.get('code','—')}`  ·  {c.get('credits','—')} cr  \n"
+                                f"**{c.get('title','Untitled')}**  \n"
+                                f"usually S{c.get('semester_primary')}  ·  view syllabus →"
+                            )
+                            if st.button(label, key=f"btn_cross_{sem}_{c['code']}", use_container_width=True):
+                                st.session_state.selected_course = c["code"]
+                                st.rerun()
+
+
+with tab_curriculum:
+    render_curriculum_tab()
 
 
 def render_course_detail(c):
@@ -208,14 +293,24 @@ def render_course_detail(c):
         badges += f" · Common to {c['common_to']}"
     st.caption(badges)
     st.markdown(f"### {c.get('title','Untitled')}")
-    st.caption(f"{c.get('code','—')} · Semester S{c.get('semester_primary')}" + (f"/S{c['semester_alt']}" if c.get("semester_alt") else ""))
+    sem_line = f"{c.get('code','—')} · Semester S{c.get('semester_primary')}"
+    if c.get("semester_alt"):
+        sem_line += f" (some colleges: S{c['semester_alt']})"
+    st.caption(sem_line)
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Credits", c.get("credits") or "—")
-    m2.metric("L:T:P:R", c.get("ltpr") or "—")
-    m3.metric("CIE", c.get("cie") or "—")
-    m4.metric("ESE", c.get("ese") or "—")
-    m5.metric("Exam dur.", c.get("exam_hours") or "—")
+    stats = [
+        ("Credits", c.get("credits") or "—"),
+        ("L:T:P:R", c.get("ltpr") or "—"),
+        ("CIE", c.get("cie") or "—"),
+        ("ESE", c.get("ese") or "—"),
+        ("Exam dur.", c.get("exam_hours") or "—"),
+    ]
+    chips_html = "".join(
+        f"<div class='stat-chip'><div class='stat-label'>{lab}</div><div class='stat-value'>{val}</div></div>"
+        for lab, val in stats
+    )
+    st.markdown(f"<div class='stat-grid'>{chips_html}</div>", unsafe_allow_html=True)
+
     if c.get("prerequisites") and c["prerequisites"].strip().lower() not in ("none", "nil", "-", ""):
         st.caption(f"**Prerequisites:** {c['prerequisites']}")
 
@@ -261,7 +356,8 @@ if st.session_state.get("selected_course"):
 # ----------------------------------------------------------------------------
 # Tab 2 — Ask the Curriculum (AI chat)
 # ----------------------------------------------------------------------------
-with tab_chat:
+@st.fragment
+def render_chat_tab():
     st.caption(
         "Ask about prerequisites, what a course covers, how semesters compare, or anything else in this "
         "syllabus extract. The assistant only answers from the catalog below — it won't make things up about "
@@ -306,12 +402,17 @@ with tab_chat:
 
     if st.session_state.chat_messages and st.button("Clear conversation"):
         st.session_state.chat_messages = []
-        st.rerun()
+        st.rerun(scope="fragment")
+
+
+with tab_chat:
+    render_chat_tab()
 
 # ----------------------------------------------------------------------------
 # Tab 3 — Elective Finder (AI recommendations)
 # ----------------------------------------------------------------------------
-with tab_finder:
+@st.fragment
+def render_finder_tab():
     st.caption(
         "Describe your interests or goals — the AI scans every Program Elective and Open Elective in this "
         "catalog and recommends the ones that fit best, with reasoning tied to what's actually in the syllabus."
@@ -352,6 +453,10 @@ with tab_finder:
                     st.markdown(reply)
                 except LLMError as e:
                     st.error(str(e))
+
+
+with tab_finder:
+    render_finder_tab()
 
 st.markdown(
     "<footer>Generated from the uploaded KTU CSE (AI&ML) syllabus copy · Course Outcomes coded K1–K6 per "
