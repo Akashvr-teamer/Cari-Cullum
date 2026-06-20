@@ -1,78 +1,127 @@
-"""Thin abstraction over free-tier LLM providers (Groq, Google Gemini).
+"""Data loading + processing helpers for the CSE (AI&ML) curriculum explorer."""
+import json
+import os
 
-Both providers offer no-credit-card free tiers as of mid-2026. Model names
-on free tiers change fairly often — if a default model below starts
-returning errors, swap it for whatever your provider's console currently
-lists as free. Groq: https://console.groq.com — Gemini: https://aistudio.google.com
-"""
+import streamlit as st
 
-DEFAULT_MODELS = {
-    "Groq": "llama-3.3-70b-versatile",
-    "Gemini": "gemini-2.5-flash",
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+
+CAT_CONFIG = {
+    "core": {"label": "Core / Compulsory", "color_var": "--gold", "emoji": "🟡"},
+    "pe":   {"label": "Program Elective",  "color_var": "--teal", "emoji": "🔵"},
+    "oe":   {"label": "Open Elective",     "color_var": "--coral", "emoji": "🟠"},
 }
 
 
-class LLMError(Exception):
-    pass
+def load_courses():
+    with open(os.path.join(DATA_DIR, "courses.json"), encoding="utf-8") as f:
+        return json.load(f)
 
 
-def call_groq(api_key, model, system_prompt, user_prompt, history=None, temperature=0.4):
+def load_semester_meta():
+    with open(os.path.join(DATA_DIR, "semester_meta.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def bucket_of(course):
+    prefix = course.get("category_prefix")
+    if prefix == "PEC":
+        return "pe"
+    if prefix == "OEC":
+        return "oe"
+    return "core"  # PCC, PBC, UC, GA
+
+
+def credit_value(course):
+    credits = course.get("credits")
+    if not credits:
+        return 0.0
+    if "/" in credits:
+        parts = [float(p) for p in credits.split("/") if p.strip()]
+        return min(parts) if parts else 0.0
     try:
-        from groq import Groq
-    except ImportError as e:
-        raise LLMError("The 'groq' package isn't installed. Run: pip install groq") from e
-
-    client = Groq(api_key=api_key)
-    messages = [{"role": "system", "content": system_prompt}]
-    for m in (history or []):
-        messages.append({"role": m["role"], "content": m["content"]})
-    messages.append({"role": "user", "content": user_prompt})
-
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-        )
-        return resp.choices[0].message.content
-    except Exception as e:  # noqa: BLE001 - surface provider errors plainly
-        raise LLMError(f"Groq request failed: {e}") from e
+        return float(credits)
+    except ValueError:
+        return 0.0
 
 
-def call_gemini(api_key, model, system_prompt, user_prompt, history=None, temperature=0.4):
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError as e:
-        raise LLMError("The 'google-genai' package isn't installed. Run: pip install google-genai") from e
+def by_semester(courses, sem):
+    """Courses whose *primary, credit-bearing* semester is `sem`.
 
-    client = genai.Client(api_key=api_key)
-    contents = []
-    for m in (history or []):
-        role = "user" if m["role"] == "user" else "model"
-        contents.append(types.Content(role=role, parts=[types.Part(text=m["content"])]))
-    contents.append(types.Content(role="user", parts=[types.Part(text=user_prompt)]))
-
-    try:
-        resp = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=temperature,
-            ),
-        )
-        return resp.text
-    except Exception as e:  # noqa: BLE001
-        raise LLMError(f"Gemini request failed: {e}") from e
+    This is the list the credit ruler/total is computed from. A course never
+    counts twice here even if it's also cross-listed via semester_alt.
+    """
+    return [c for c in courses if c.get("semester_primary") == sem]
 
 
-def call_llm(provider, api_key, system_prompt, user_prompt, model=None, history=None, temperature=0.4):
-    if not api_key:
-        raise LLMError("No API key set. Add one in the sidebar to use the AI features.")
-    model = model or DEFAULT_MODELS.get(provider)
-    if provider == "Groq":
-        return call_groq(api_key, model, system_prompt, user_prompt, history, temperature)
-    if provider == "Gemini":
-        return call_gemini(api_key, model, system_prompt, user_prompt, history, temperature)
-    raise LLMError(f"Unknown provider: {provider}")
+def cross_listed_for(courses, sem):
+    """Courses taught in `sem` at *some* colleges, but whose official credit
+    slot (semester_primary) is a different semester — e.g. Economics for
+    Engineers / Engineering Ethics, which KTU lists as S3 but plenty of
+    colleges actually run in S4.
+
+    These are shown for reference in the alt semester's tab, but are
+    deliberately excluded from that semester's credit_summary/total, since
+    a student only takes — and is only credited for — it once, in whichever
+    semester their own college schedules it.
+    """
+    return [c for c in courses if c.get("semester_alt") == sem]
+
+
+def credit_summary(courses):
+    core = 0.0
+    pe_vals, oe_vals = set(), set()
+    for c in courses:
+        b = bucket_of(c)
+        v = credit_value(c)
+        if b == "core":
+            core += v
+        elif b == "pe":
+            pe_vals.add(v)
+        elif b == "oe":
+            oe_vals.add(v)
+    pe = min(pe_vals) if pe_vals else 0.0
+    oe = min(oe_vals) if oe_vals else 0.0
+    return {
+        "core": core, "pe": pe, "oe": oe,
+        "has_pe": bool(pe_vals), "has_oe": bool(oe_vals),
+    }
+
+
+@st.cache_data(show_spinner=False)
+def condensed_catalog(courses, only_buckets=None, max_chars=None):
+    """Build a compact, token-cheap text catalog for LLM context.
+
+    Cached: with 98 courses this is cheap either way, but the chat tab calls
+    it on every single message, so we skip rebuilding the string from
+    scratch each time the course data itself hasn't changed.
+    """
+    lines = []
+    for c in courses:
+        b = bucket_of(c)
+        if only_buckets and b not in only_buckets:
+            continue
+        label = CAT_CONFIG[b]["label"]
+        line = f"[S{c.get('semester_primary')}] {c.get('code')} — {c.get('title')} ({label}, {c.get('credits')} cr)"
+        prereq = c.get("prerequisites")
+        if prereq and prereq.strip().lower() not in ("none", "nil", "-", ""):
+            line += f" | Prereq: {prereq.strip()}"
+        objectives = c.get("objectives") or []
+        if objectives:
+            line += f" | About: {objectives[0][:160]}"
+        common_to = c.get("common_to")
+        if common_to:
+            line += f" | Common to: {common_to}"
+        lines.append(line)
+    text = "\n".join(lines)
+    if max_chars and len(text) > max_chars:
+        text = text[:max_chars] + "\n…(catalog truncated)"
+    return text
+
+
+def find_course(courses, code):
+    code = (code or "").strip().upper()
+    for c in courses:
+        if c.get("code", "").upper() == code:
+            return c
+    return None
